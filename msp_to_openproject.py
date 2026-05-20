@@ -13,6 +13,7 @@ Env vars (defaults already set; override with CLI flags):
 Requirements: Java 8+ on PATH, pip install mpxj JPype1 requests
 """
 
+import json
 import os
 import sys
 import argparse
@@ -316,6 +317,32 @@ class OPClient:
             offset += 100
         return all_wps
 
+    def get_project_relations(self, wp_ids: list[int]) -> list[dict]:
+        """Fetch all relations involving the given work package IDs.
+
+        Uses the /api/v3/relations?filters= endpoint in batches of 50 IDs to
+        avoid hitting URL length limits.  Returns a deduplicated list.
+        """
+        if not wp_ids:
+            return []
+        all_rels: list[dict] = []
+        seen: set[int] = set()
+        for i in range(0, len(wp_ids), 50):
+            chunk = [str(x) for x in wp_ids[i:i + 50]]
+            filters = json.dumps(
+                [{"involved": {"operator": "=", "values": chunk}}]
+            )
+            try:
+                data = self._get("/api/v3/relations", filters=filters, pageSize=500)
+                for rel in data.get("_embedded", {}).get("elements", []):
+                    rid = rel.get("id")
+                    if rid not in seen:
+                        seen.add(rid)
+                        all_rels.append(rel)
+            except Exception as e:
+                log.warning("Could not fetch relations (batch %d): %s", i // 50, e)
+        return all_rels
+
     def delete_work_package(self, wp_id: int) -> None:
         r = self.s.delete(
             f"{self.base}/api/v3/work_packages/{wp_id}",
@@ -560,15 +587,29 @@ def import_msp(mpp_path: str, project_id: int, client: OPClient) -> None:
 
 # ── Export ───────────────────────────────────────────────────────────────────
 
+# (mpxj RelationType name, pred_is_from)
+# pred_is_from=True  → _links.from is the predecessor, _links.to is the successor
+# pred_is_from=False → _links.from is the successor,   _links.to is the predecessor
+_OP_REL_CONFIG: dict[str, tuple[str, bool]] = {
+    "precedes": ("FINISH_START", True),
+    "follows":  ("FINISH_START", False),  # inverse of precedes
+    "blocks":   ("FINISH_START", True),
+    "relates":  ("FINISH_START", True),
+}
+
+
 def export_to_mspdi(project_id: int, client: OPClient) -> bytes:
     """Export an OpenProject project to MSPDI XML (openable by MS Project)."""
     _start_jvm()
     from jpype import JClass
 
-    ProjectFile   = JClass("org.mpxj.ProjectFile")
-    MSPDIWriter   = JClass("org.mpxj.mspdi.MSPDIWriter")
-    ByteArrayOS   = JClass("java.io.ByteArrayOutputStream")
-    LocalDateTime = JClass("java.time.LocalDateTime")
+    ProjectFile    = JClass("org.mpxj.ProjectFile")
+    MSPDIWriter    = JClass("org.mpxj.mspdi.MSPDIWriter")
+    ByteArrayOS    = JClass("java.io.ByteArrayOutputStream")
+    LocalDateTime  = JClass("java.time.LocalDateTime")
+    RelationType   = JClass("org.mpxj.RelationType")
+    Duration       = JClass("org.mpxj.Duration")
+    TimeUnit       = JClass("org.mpxj.TimeUnit")
 
     proj_info = client._get(f"/api/v3/projects/{project_id}")
     wps = client._get_all_work_packages(project_id)
@@ -597,6 +638,7 @@ def export_to_mspdi(project_id: int, client: OPClient) -> bytes:
         except Exception:
             return 0
 
+    # ── Pass 1: build task tree ───────────────────────────────────────────────
     for wp in sorted(wps, key=lambda w: _depth(w["id"])):
         parent_href = ((wp.get("_links") or {}).get("parent") or {}).get("href") or ""
         parent_task = None
@@ -631,6 +673,64 @@ def export_to_mspdi(project_id: int, client: OPClient) -> bytes:
             task.setNotes(desc)
 
         task_map[wp["id"]] = task
+
+    # ── Pass 2: wire up predecessors ──────────────────────────────────────────
+    wp_ids = [wp["id"] for wp in wps]
+    relations = client.get_project_relations(wp_ids)
+    log.info("Export: %d relations fetched", len(relations))
+
+    rel_ok = rel_skip = 0
+    for rel in relations:
+        rel_type_str = (rel.get("type") or "precedes").lower()
+        config = _OP_REL_CONFIG.get(rel_type_str)
+        if config is None:
+            rel_skip += 1
+            continue
+
+        rt_name, pred_is_from = config
+        links = rel.get("_links") or {}
+        from_href = (links.get("from") or {}).get("href") or ""
+        to_href   = (links.get("to")   or {}).get("href") or ""
+
+        try:
+            from_id = int(from_href.rstrip("/").split("/")[-1])
+            to_id   = int(to_href.rstrip("/").split("/")[-1])
+        except (ValueError, IndexError):
+            rel_skip += 1
+            continue
+
+        pred_id = from_id if pred_is_from else to_id
+        succ_id = to_id   if pred_is_from else from_id
+        pred_task = task_map.get(pred_id)
+        succ_task = task_map.get(succ_id)
+        if not pred_task or not succ_task:
+            rel_skip += 1
+            continue
+
+        # OpenProject returns lag as "lag" (not "lagDays") in relation reads
+        raw_lag  = rel.get("lag") or rel.get("lagDays") or 0
+        try:
+            lag_days = int(raw_lag)
+        except (TypeError, ValueError):
+            lag_days = 0
+        lag_dur = Duration.getInstance(lag_days, TimeUnit.DAYS)
+        rt      = RelationType.valueOf(rt_name)
+
+        try:
+            # Pass the Relation.Builder to addPredecessor — the method sets
+            # successorTask=this internally before building the Relation object.
+            # Calling .build() before passing it leaves successorTask null.
+            Builder = JClass("org.mpxj.Relation$Builder")
+            succ_task.addPredecessor(
+                Builder().predecessorTask(pred_task).type(rt).lag(lag_dur)
+            )
+            rel_ok += 1
+        except Exception as e:
+            log.warning("Export: could not set predecessor WP#%d → WP#%d: %s",
+                        pred_id, succ_id, e)
+            rel_skip += 1
+
+    log.info("Export: %d predecessors written, %d skipped", rel_ok, rel_skip)
 
     baos = ByteArrayOS()
     MSPDIWriter().write(pf, baos)
