@@ -104,6 +104,75 @@ async def health():
         )
 
 
+@app.get("/api/jvm-check")
+def jvm_check():
+    """Verify Java and mpxj are working. Returns a detailed diagnostic report."""
+    import glob
+
+    results = []
+
+    def check(label, ok, detail=""):
+        results.append({"label": label, "ok": ok, "detail": detail})
+
+    # JPype available
+    try:
+        import jpype as _jp
+        check("JPype1 installed", True, _jp.__version__)
+    except ImportError:
+        check("JPype1 installed", False, "pip install JPype1")
+        return {"ok": False, "results": results}
+
+    # mpxj available
+    try:
+        import mpxj as _mpxj
+        check("mpxj installed", True, _mpxj.mpxj_dir)
+    except ImportError:
+        check("mpxj installed", False, "pip install mpxj")
+        return {"ok": False, "results": results}
+
+    # JVM path
+    try:
+        jvm_path = _jp.getDefaultJVMPath()
+        check("JVM path found", True, jvm_path)
+    except Exception as e:
+        check("JVM path found", False, str(e))
+        return {"ok": False, "results": results}
+
+    # Start JVM (idempotent)
+    if not _jp.isJVMStarted():
+        try:
+            for jar in glob.glob(os.path.join(_mpxj.mpxj_dir, "*.jar")):
+                _jp.addClassPath(jar)
+            _jp.startJVM(jvm_path, convertStrings=True)
+            check("JVM started", True)
+        except Exception as e:
+            check("JVM started", False, str(e))
+            return {"ok": False, "results": results}
+    else:
+        check("JVM started", True, "already running")
+
+    # Java version
+    try:
+        from jpype import JClass
+        System = JClass("java.lang.System")
+        java_ver  = str(System.getProperty("java.version"))
+        java_home = str(System.getProperty("java.home"))
+        check("Java version", True, java_ver)
+        check("Java home",    True, java_home)
+    except Exception as e:
+        check("Java version", False, str(e))
+
+    # mpxj reader
+    try:
+        JClass("org.mpxj.reader.UniversalProjectReader")
+        check("mpxj reader loaded", True)
+    except Exception as e:
+        check("mpxj reader loaded", False, str(e))
+
+    all_ok = all(r["ok"] for r in results)
+    return {"ok": all_ok, "results": results}
+
+
 @app.get("/api/projects")
 async def list_projects():
     """Return all accessible OpenProject projects."""
