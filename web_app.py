@@ -227,6 +227,18 @@ async def start_import(
         _import_logger.addHandler(handler)
         pid = project_id
         try:
+            # Start JVM and parse the file before creating anything in OpenProject.
+            # If Java is missing or the file is unreadable the job fails here,
+            # leaving no orphaned empty project behind.
+            _import_logger.info("Validating file and starting JVM…")
+            try:
+                importer._start_jvm()
+                importer._load_project(tmp.name)
+            except SystemExit as e:
+                raise RuntimeError(str(e))
+            except Exception as e:
+                raise RuntimeError(f"Could not read project file: {e}")
+
             if overwrite and pid:
                 deleted = _client.clear_project(pid)
                 _import_logger.info(
