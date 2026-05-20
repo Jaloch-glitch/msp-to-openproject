@@ -98,6 +98,10 @@ def _load_project(path: str):
     jpype = _start_jvm()
     from jpype import JClass
 
+    # Normalise to forward slashes — required on Windows where tempfile returns
+    # backslash paths that can confuse the Java file reader.
+    path = path.replace("\\", "/")
+
     UPR = JClass("org.mpxj.reader.UniversalProjectReader")
     return UPR().read(path)
 

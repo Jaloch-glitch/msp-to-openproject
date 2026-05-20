@@ -212,9 +212,13 @@ async def start_import(
     if not content:
         raise HTTPException(400, "The uploaded file is empty")
 
+    # delete=False + explicit close is required on Windows — NamedTemporaryFile
+    # holds an exclusive lock while open, which blocks Java from reading the file.
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=ext)
-    tmp.write(content)
-    tmp.close()
+    try:
+        tmp.write(content)
+    finally:
+        tmp.close()
 
     # ── Launch import thread ───────────────────────────────────────────────
     job_id = str(uuid.uuid4())
