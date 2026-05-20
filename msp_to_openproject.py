@@ -346,7 +346,7 @@ class OPClient:
     def delete_work_package(self, wp_id: int) -> None:
         r = self.s.delete(
             f"{self.base}/api/v3/work_packages/{wp_id}",
-            timeout=30,
+            timeout=60,
         )
         r.raise_for_status()
 
@@ -381,13 +381,24 @@ class OPClient:
         sorted_wps = sorted(wps, key=lambda w: _depth(w["id"]), reverse=True)
         deleted = 0
         for wp in sorted_wps:
-            try:
-                self.delete_work_package(wp["id"])
-                deleted += 1
-                if deleted % 50 == 0:
-                    log.info("  Cleared %d / %d work packages…", deleted, len(wps))
-            except requests.HTTPError as e:
-                log.warning("  Could not delete WP#%d: %s", wp["id"], e)
+            retries = 2
+            while retries >= 0:
+                try:
+                    self.delete_work_package(wp["id"])
+                    deleted += 1
+                    break
+                except requests.exceptions.Timeout:
+                    if retries:
+                        log.warning("  DELETE WP#%d timed out — retrying…", wp["id"])
+                        retries -= 1
+                    else:
+                        log.warning("  DELETE WP#%d timed out after retries — skipping", wp["id"])
+                        break
+                except requests.HTTPError as e:
+                    log.warning("  Could not delete WP#%d: %s", wp["id"], e)
+                    break
+            if deleted % 10 == 0 and deleted:
+                log.info("  Cleared %d / %d work packages…", deleted, len(wps))
         return deleted
 
 

@@ -377,6 +377,7 @@ async def stream_log(job_id: str):
         raise HTTPException(404, "Job not found (may have already completed)")
 
     async def event_gen():
+        last_heartbeat = asyncio.get_event_loop().time()
         try:
             while True:
                 try:
@@ -388,7 +389,12 @@ async def stream_log(job_id: str):
                         break
                     level, message = item
                     yield f"event: log\ndata: {json.dumps({'level': level, 'message': message})}\n\n"
+                    last_heartbeat = asyncio.get_event_loop().time()
                 except queue.Empty:
+                    now = asyncio.get_event_loop().time()
+                    if now - last_heartbeat > 15:
+                        yield ": heartbeat\n\n"
+                        last_heartbeat = now
                     await asyncio.sleep(0.05)
         except asyncio.CancelledError:
             pass  # client disconnected — nothing to clean up here
