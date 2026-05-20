@@ -57,8 +57,40 @@ def _start_jvm():
     for jar in glob.glob(os.path.join(jar_dir, "*.jar")):
         jpype.addClassPath(jar)
 
-    jpype.startJVM(convertStrings=True)
+    # Resolve the JVM path explicitly — more reliable than letting JPype guess,
+    # especially on Windows where JAVA_HOME may not be set but the registry has it.
+    try:
+        jvm_path = jpype.getDefaultJVMPath()
+    except Exception:
+        _jvm_not_found()
+
+    try:
+        jpype.startJVM(jvm_path, convertStrings=True)
+    except Exception as exc:
+        if "jvm.dll" in str(exc).lower() or "shared library" in str(exc).lower():
+            _jvm_not_found()
+        raise
+
     return jpype
+
+
+def _jvm_not_found() -> None:
+    if sys.platform == "win32":
+        sys.exit(
+            "No JVM found. Java is either not installed or JAVA_HOME is not set.\n\n"
+            "Fix:\n"
+            "  1. Install Java 11+ from https://adoptium.net (Eclipse Temurin recommended)\n"
+            "  2. Open System Properties > Environment Variables\n"
+            "  3. Add a System variable:  JAVA_HOME = C:\\Program Files\\Eclipse Adoptium\\jdk-21...\\  "
+            "(adjust to your install path)\n"
+            "  4. Edit the System PATH variable and append:  %JAVA_HOME%\\bin\n"
+            "  5. Close and reopen your terminal, then restart the application.\n\n"
+            "To verify: run  java -version  in a new Command Prompt."
+        )
+    sys.exit(
+        "No JVM found. Install Java 11+ and ensure it is on your PATH.\n"
+        "Verify with: java -version"
+    )
 
 
 def _load_project(path: str):

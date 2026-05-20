@@ -350,7 +350,8 @@ See `docs/reference.md` for a complete debugging reference including log pattern
 
 Common issues:
 
-- **`java -version` not found** — Java is not on PATH. Install Java 8+ and ensure it is in your system PATH.
+- **`No JVM shared library file (jvm.dll) found` (Windows)** — Java is installed but `JAVA_HOME` is not set as a system environment variable. The application will print step-by-step fix instructions. Short version: install [Eclipse Temurin JDK 21](https://adoptium.net) using the `.msi` installer — it sets `JAVA_HOME` automatically. See `docs/reference.md` for the full manual setup procedure.
+- **`java -version` not found** — Java is not on PATH. Install Java 11+ and ensure it is in your system PATH.
 - **`pip install JPype1` fails on Windows** — Install Microsoft C++ Build Tools (see Prerequisites).
 - **Connection refused on health check** — The server is not running, or is bound to a different port.
 - **401 on project list** — API key is invalid or has expired.

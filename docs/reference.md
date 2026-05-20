@@ -475,6 +475,34 @@ mpxj parses the entire file into memory before the Python loop begins. Very larg
 
 The importer matches resource names from the MSP file against the `name`, `login`, and `email` fields of OpenProject users. If the names do not match exactly (case-insensitive), the assignment is skipped. The API key also needs admin-level user listing permissions. Check debug output (`-v` flag or browser DevTools) for `Resource 'X' not found in OP users` messages.
 
+### Windows: "No JVM shared library file (jvm.dll) found"
+
+This is the most common Windows setup problem. Java is installed but JPype cannot locate `jvm.dll` because `JAVA_HOME` is not set as a system environment variable.
+
+The application now calls `jpype.getDefaultJVMPath()` before starting the JVM, which also checks the Windows registry. This resolves the issue automatically if Java was installed with a standard installer. If the error still appears, set `JAVA_HOME` manually:
+
+1. Find your Java installation directory. Common locations:
+   - `C:\Program Files\Eclipse Adoptium\jdk-21.0.x.x-hotspot\`
+   - `C:\Program Files\Java\jdk-21\`
+   - `C:\Program Files\Microsoft\jdk-21.0.x.x-hotspot\`
+   - Run `where java` in a Command Prompt to find it, then go one level up from `bin\`
+
+2. Open **System Properties** (Win + R, type `sysdm.cpl`, press Enter)
+
+3. Click **Advanced** > **Environment Variables**
+
+4. Under **System variables**, click **New**:
+   - Variable name: `JAVA_HOME`
+   - Variable value: the path from step 1 (no trailing backslash)
+
+5. Find the **Path** variable in System variables, click **Edit**, then **New**, and add: `%JAVA_HOME%\bin`
+
+6. Click OK on all dialogs, then **close and reopen** your terminal and the application.
+
+7. Verify with: `java -version`
+
+Eclipse Temurin (from https://adoptium.net) is the recommended Java distribution. Choose JDK 21 LTS, Windows x64, `.msi` installer — it sets `JAVA_HOME` automatically during installation.
+
 ### Windows: backslash in file paths
 
 The `_load_project(path)` function passes the path directly to Java's `UniversalProjectReader.read(path)`. Java on Windows accepts both forward and backward slashes in file paths. The `tempfile.NamedTemporaryFile` on Windows returns a backslash path; this is handled correctly.
